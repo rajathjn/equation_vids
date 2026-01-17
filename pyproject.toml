@@ -1,0 +1,66 @@
+[project]
+name = "equation-vids"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    {name = "rajathjn",email = "rajathjnx@gmail.com"}
+]
+license = "AGPL-3.0-or-later"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cupy-cuda13x>=13.6.0",
+    "moviepy>=2.2.1",
+    "numpy>=2.4.1",
+    "pillow>=11.3.0",
+    "tqdm>=4.67.1",
+]
+
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
+[tool.ruff]
+exclude = [
+    ".git",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".tox",
+    "_build",
+    "build",
+    "venv",
+    ".pytest_cache",
+    ".venv",
+    ".vscode",
+    ".idea"
+]
+line-length = 100
+indent-width = 4
+fix = true
+
+[tool.ruff.lint]
+extend-select = [
+    "UP",  # pyupgrade
+    "I",   # isort
+]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
