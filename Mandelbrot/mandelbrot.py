@@ -3,19 +3,16 @@ import cupy as cp
 import time
 import os
 from PIL import Image
-from moviepy import ImageSequenceClip, AudioFileClip, ColorClip, concatenate_videoclips
-from moviepy import afx, vfx
 
 # Constants
 # CENTER = (-0.7436438870371587, 0.13182590420642563)  # Tante Renate
-CENTER = (-0.7436438870570570, 0.13182590420637833)  # Tante Renate
+CENTER = (-1.4002, 0)  # Tante Renate
 THRESHOLD_SQ = 4.0  # Pre-computed threshold squared (2.0)
-FPS = 30.0
+FPS = 60.0
 DURATION = 60.0
-WIDTH = 3840
-HEIGHT = 2400
+WIDTH = 1920
+HEIGHT = 1080
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'audio')
 
 
 def get_coordinates(R: float) -> tuple[float, float, float, float]:
@@ -84,63 +81,11 @@ def generate_mandelbrot_gpu(R: float, width: int, height: int, max_iter: int,
     
     if display:
         Image.fromarray(img_cpu).show()
-
-
-PADDING_SECONDS = 1.0  # Blank lead-in and lead-out duration
-FADE_DURATION = 1.0   # Video fade in/out duration
-
-
-def create_video(fps: float = 30.0, audio_file: str = None) -> None:
-    """Create video from images with optional audio."""
-    if not os.path.exists(DATA_DIR):
-        print(f"Data directory not found: {DATA_DIR}")
-        return
     
-    filenames = [f for f in os.listdir(DATA_DIR) if f.endswith('.png')]
-    if not filenames:
-        print("No PNG files found")
-        return
+    # Free up memory
+    del img, img_cpu, escape_iter, not_escaped, z_real, z_imag, new_real, new_imag, c_real, c_imag
     
-    filenames = sorted(filenames, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-    image_paths = [os.path.join(DATA_DIR, f) for f in filenames]
-    
-    print(f"Found {len(filenames)} images")
-    print(f"First 10: {filenames[:10]}")
-    
-    output_path = os.path.join(os.path.dirname(__file__), 'output.mp4')
-    
-    video = ImageSequenceClip(image_paths, fps=fps)
-
-    # Add blank pads at start and end
-    blank = ColorClip(size=video.size, color=(0, 0, 0), duration=PADDING_SECONDS)
-    video = concatenate_videoclips([blank, video, blank])
-
-    # Add video fade in/out
-    video = video.with_effects(
-        [
-            vfx.FadeIn(FADE_DURATION),
-            vfx.FadeOut(FADE_DURATION)
-        ]
-    )
-    
-    if audio_file:
-        audio_path = os.path.join(AUDIO_DIR, audio_file)
-        if os.path.exists(audio_path):
-            print(f"Adding audio: {audio_file}")
-            audio = AudioFileClip(audio_path)
-            audio = audio.with_effects(
-                [
-                    afx.AudioLoop(duration=video.duration),
-                    afx.AudioFadeIn(FADE_DURATION),
-                    afx.AudioFadeOut(FADE_DURATION)
-                ]
-            )
-            video = video.with_audio(audio)
-            audio.close()
-    
-    video.write_videofile(output_path, codec='libx264', audio_codec='aac', fps=fps)
-    video.close()
-    print(f"Video saved: {output_path}")
+    return
 
 
 def main():
@@ -152,8 +97,8 @@ def main():
     R_start = 3.0
     R_end = 1e-13
     
-    start_index = 0
-    
+    start_index = 200
+        
     print(f"Generating {total_frames} images")
     print(f"Zooming from {R_start} down to {R_end}")
     print(f"Resolution: {WIDTH}x{HEIGHT}, Max iterations: {max_iter_start} to {max_iter_end}")
@@ -179,7 +124,7 @@ def main():
         
         img_name = f'Mandelbrot_{i:04d}'
         
-        generate_mandelbrot_gpu(current_R, WIDTH, HEIGHT, current_iter, img_name, True)
+        generate_mandelbrot_gpu(current_R, WIDTH, HEIGHT, current_iter, img_name, False)
         cp.get_default_memory_pool().free_all_blocks()
         
         elapsed = time.time() - start
@@ -195,6 +140,5 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # create_video(fps=60.0, audio_file="Euler's Clock.mp3")
 
 

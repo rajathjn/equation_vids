@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "cupy-cuda13x>=13.6.0",
+    "manim>=0.19.2",
     "moviepy>=2.2.1",
     "numpy>=2.4.1",
     "pillow>=11.3.0",
