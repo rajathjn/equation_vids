@@ -6,7 +6,7 @@ from moviepy import afx, vfx
 
 PADDING_SECONDS = 1.0  # Blank lead-in and lead-out duration
 FADE_DURATION = 1.0   # Video fade in/out duration
-DATA_DIR = os.path.join(os.path.dirname(__file__), "Mandelbrot", "data")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "Juliaset", "data_c")
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), "audio")
 
 def create_video(fps: float = 30.0, audio_file: str = None) -> None:
