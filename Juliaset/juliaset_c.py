@@ -107,9 +107,6 @@ def generate_juliaset_gpu(c_value: complex, R: float, width: int, height: int,
     log_zn = cp.log2(cp.abs(z_mag_sq_final))
     smooth_iter = escape_iter.astype(cp.float64) + 1 - cp.log2(cp.maximum(log_zn, 1e-13))
     
-    # Normalize to [0, 1]
-    smooth_iter_max = max(cp.max(smooth_iter), max_iter)
-    t = smooth_iter / smooth_iter_max
     t = smooth_iter * 0.05
     
     # COSINE PALETTE: color(t) = a + b * cos(2π(c*t + d))
@@ -120,19 +117,19 @@ def generate_juliaset_gpu(c_value: complex, R: float, width: int, height: int,
     d = cp.array([0.5, 0.5, 0.5])   # All start at black
 
     # color = a + b * cos(2*pi* (c * t + d))
-    r = a[0] + b[0] * cp.cos(2 * cp.pi * (c[0] * t + d[0]))
-    g = a[1] + b[1] * cp.cos(2 * cp.pi * (c[1] * t + d[1]))
-    b = a[2] + b[2] * cp.cos(2 * cp.pi * (c[2] * t + d[2]))
+    red = a[0] + b[0] * cp.cos(2 * cp.pi * (c[0] * t + d[0]))
+    green = a[1] + b[1] * cp.cos(2 * cp.pi * (c[1] * t + d[1]))
+    blue = a[2] + b[2] * cp.cos(2 * cp.pi * (c[2] * t + d[2]))
     
     # Clamp to [0, 1] and scale to [0, 255]
-    r = (r * 255).clip(0, 255).astype(cp.uint8)
-    g = (g * 255).clip(0, 255).astype(cp.uint8)
-    b = (b * 255).clip(0, 255).astype(cp.uint8)
+    red = (red * 255).clip(0, 255).astype(cp.uint8)
+    green = (green * 255).clip(0, 255).astype(cp.uint8)
+    blue = (blue * 255).clip(0, 255).astype(cp.uint8)
     
     # Set non-escaped pixels to black
-    r[not_escaped] = 0
-    g[not_escaped] = 0
-    b[not_escaped] = 0
+    red[not_escaped] = 0
+    green[not_escaped] = 0
+    blue[not_escaped] = 0
     
     img = cp.stack([r, g, b], axis=2)
     

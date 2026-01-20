@@ -15,6 +15,9 @@ WIDTH = 1920
 HEIGHT = 1080
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
+# For supersampling
+AA_LEVEL = 2
+
 
 def get_coordinates(R: float) -> tuple[float, float, float, float]:
     """Returns the bounds of the complex plane centered at CENTER."""
@@ -28,6 +31,10 @@ def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int,
     """
     Generate and save a Julia set image using GPU acceleration.
     """
+    # Supersampling: render at higher resolution
+    width *= AA_LEVEL
+    height *= AA_LEVEL
+
     # Create complex plane on GPU
     x_min, x_max, y_min, y_max = get_coordinates(R)
     real = cp.linspace(x_min, x_max, width, dtype=cp.float64)
@@ -66,75 +73,47 @@ def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int,
         if cp.count_nonzero(not_escaped) < width * height * 0.001:  # <0.1% remain
             break
     
-    # Smooth iteration count to remove banding
-    # smooth_iter = iter + 1 - log2(log2(|z|))
+    # SMOOTH ITERATION - eliminates color banding
     z_mag_sq_final = z_real * z_real + z_imag * z_imag
-    # Clamp to avoid log of zero or negative
-    z_mag_sq_final = cp.maximum(z_mag_sq_final, 1e-13)
-    log_zn = cp.log(z_mag_sq_final) / 2  # log(|z|) = log(|z|^2) / 2
-    smooth_iter = escape_iter.astype(cp.float64) + 1.0 - cp.log2(cp.maximum(log_zn, 1e-13))
     
-    # Normalize to 0-1 range for coloring
-    smooth_iter[not_escaped] = 0
-    smooth_iter = cp.maximum(smooth_iter, 0)
+    # Smooth iteration count: escape_iter + 1 - log2(log2(|z|) / log(bailout))
+    # bailout = 2, so log(bailout) = log(2)
+    log_zn = cp.log2(cp.abs(z_mag_sq_final))
+    smooth_iter = escape_iter.astype(cp.float64) + 1 - cp.log2(cp.maximum(log_zn, 1e-13))
     
-    # HSV-based colormap for vibrant, psychedelic colors
-    # Hue cycles through the spectrum, saturation and value create depth
-    t = smooth_iter / max_iter  # Normalize to 0-1
+    t = smooth_iter * 0.05
     
-    # Create smooth, cycling hue with multiple color bands
-    # Start from blue (hue=0.66 in HSV, which is 240 degrees)
-    hue = (t * 10.0 + 0.66) % 1.0  # Cycle through hues 5 times, starting from blue
-    saturation = 1.0 + 0.3 * cp.sin(t * cp.pi * 2)  # Varying saturation
-    value = 0.9 + 0.1 * cp.cos(t * cp.pi * 4)  # Slight value variation
-    value = cp.clip(value, 0, 1)
+    # COSINE PALETTE: color(t) = a + b * cos(2π(c*t + d))
+    # Critical rule: a + b ≤ 1 and a - b ≥ 0 to avoid clipping
+    a = cp.array([0.5, 0.5, 0.5])   # Mid brightness
+    b = cp.array([0.5, 0.5, 0.5])   # Full contrast  
+    c = cp.array([0.8, 1.0, 1.2])   # Different frequencies → colors
+    d = cp.array([0.5, 0.5, 0.5])   # All start at black
+
+    # color = a + b * cos(2*pi* (c * t + d))
+    red = a[0] + b[0] * cp.cos(2 * cp.pi * (c[0] * t + d[0]))
+    green = a[1] + b[1] * cp.cos(2 * cp.pi * (c[1] * t + d[1]))
+    blue = a[2] + b[2] * cp.cos(2 * cp.pi * (c[2] * t + d[2]))
     
-    # HSV to RGB conversion
-    c = value * saturation
-    x = c * (1 - cp.abs((hue * 6) % 2 - 1))
-    m = value - c
+    # Clamp to [0, 1] and scale to [0, 255]
+    red = (red * 255).clip(0, 255).astype(cp.uint8)
+    green = (green * 255).clip(0, 255).astype(cp.uint8)
+    blue = (blue * 255).clip(0, 255).astype(cp.uint8)
     
-    hue_section = (hue * 6).astype(cp.int32) % 6
+    # Set non-escaped pixels to black
+    red[not_escaped] = 0
+    green[not_escaped] = 0
+    blue[not_escaped] = 0
     
-    r = cp.zeros_like(hue)
-    g = cp.zeros_like(hue)
-    b = cp.zeros_like(hue)
-    
-    # Section 0: R=C, G=X, B=0
-    mask = hue_section == 0
-    r[mask] = c[mask]; g[mask] = x[mask]; b[mask] = 0
-    # Section 1: R=X, G=C, B=0
-    mask = hue_section == 1
-    r[mask] = x[mask]; g[mask] = c[mask]; b[mask] = 0
-    # Section 2: R=0, G=C, B=X
-    mask = hue_section == 2
-    r[mask] = 0; g[mask] = c[mask]; b[mask] = x[mask]
-    # Section 3: R=0, G=X, B=C
-    mask = hue_section == 3
-    r[mask] = 0; g[mask] = x[mask]; b[mask] = c[mask]
-    # Section 4: R=X, G=0, B=C
-    mask = hue_section == 4
-    r[mask] = x[mask]; g[mask] = 0; b[mask] = c[mask]
-    # Section 5: R=C, G=0, B=X
-    mask = hue_section == 5
-    r[mask] = c[mask]; g[mask] = 0; b[mask] = x[mask]
-    
-    r = ((r + m) * 255).astype(cp.uint8)
-    g = ((g + m) * 255).astype(cp.uint8)
-    b = ((b + m) * 255).astype(cp.uint8)
-    
-    # Set interior (non-escaped) points to black
-    r[not_escaped] = 0
-    g[not_escaped] = 0
-    b[not_escaped] = 0
-    
-    # Create image in RGB format (Pillow/MoviePy expect RGB)    
     img = cp.stack([r, g, b], axis=2)
     
-    # Transfer to CPU and save with Pillow
     img_cpu = cp.asnumpy(img)
     os.makedirs(DATA_DIR, exist_ok=True)
-    Image.fromarray(img_cpu).save(os.path.join(DATA_DIR, f'{img_name}.png'))
+    (
+        Image.fromarray(img_cpu)
+            .resize((width // AA_LEVEL, height // AA_LEVEL), Image.Resampling.LANCZOS)
+            .save(os.path.join(DATA_DIR, f'{img_name}.png'))
+    )
     
     if display:
         Image.fromarray(img_cpu).show()

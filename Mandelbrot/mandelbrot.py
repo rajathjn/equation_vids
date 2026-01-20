@@ -14,6 +14,9 @@ WIDTH = 1920
 HEIGHT = 1080
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
+# For supersampling
+AA_LEVEL = 2
+
 
 def get_coordinates(R: float) -> tuple[float, float, float, float]:
     """Returns the bounds of the complex plane centered at CENTER."""
@@ -27,6 +30,10 @@ def generate_mandelbrot_gpu(R: float, width: int, height: int, max_iter: int,
     """
     Generate and save a Mandelbrot set image using GPU acceleration.
     """
+    # Supersampling: render at higher resolution
+    width *= AA_LEVEL
+    height *= AA_LEVEL
+
     # Create complex plane on GPU
     x_min, x_max, y_min, y_max = get_coordinates(R)
     real = cp.linspace(x_min, x_max, width, dtype=cp.float64)
@@ -63,21 +70,47 @@ def generate_mandelbrot_gpu(R: float, width: int, height: int, max_iter: int,
         if cp.count_nonzero(not_escaped) < width * height * 0.001:  # <0.1% remain
             break
     
-    r = (escape_iter * 1) % 256
-    g = (escape_iter * 2) % 256
-    b = (escape_iter * 4) % 256
+    # SMOOTH ITERATION - eliminates color banding
+    z_mag_sq_final = z_real * z_real + z_imag * z_imag
     
-    r[not_escaped] = 0
-    g[not_escaped] = 0
-    b[not_escaped] = 0
+    # Smooth iteration count: escape_iter + 1 - log2(log2(|z|) / log(bailout))
+    # bailout = 2, so log(bailout) = log(2)
+    log_zn = cp.log2(cp.abs(z_mag_sq_final))
+    smooth_iter = escape_iter.astype(cp.float64) + 1 - cp.log2(cp.maximum(log_zn, 1e-13))
     
-    # Create image in RGB format (Pillow/MoviePy expect RGB)    
-    img = cp.stack([r, g, b], axis=2).astype(cp.uint8)
+    t = smooth_iter * 0.05
     
-    # Transfer to CPU and save with Pillow
+    # COSINE PALETTE: color(t) = a + b * cos(2π(c*t + d))
+    # Critical rule: a + b ≤ 1 and a - b ≥ 0 to avoid clipping
+    a = cp.array([0.5, 0.5, 0.5])   # Mid brightness
+    b = cp.array([0.5, 0.5, 0.5])   # Full contrast  
+    c = cp.array([0.8, 1.0, 1.2])   # Different frequencies → colors
+    d = cp.array([0.5, 0.5, 0.5])   # All start at black
+
+    # color = a + b * cos(2*pi* (c * t + d))
+    red = a[0] + b[0] * cp.cos(2 * cp.pi * (c[0] * t + d[0]))
+    green = a[1] + b[1] * cp.cos(2 * cp.pi * (c[1] * t + d[1]))
+    blue = a[2] + b[2] * cp.cos(2 * cp.pi * (c[2] * t + d[2]))
+    
+    # Clamp to [0, 1] and scale to [0, 255]
+    red = (red * 255).clip(0, 255).astype(cp.uint8)
+    green = (green * 255).clip(0, 255).astype(cp.uint8)
+    blue = (blue * 255).clip(0, 255).astype(cp.uint8)
+    
+    # Set non-escaped pixels to black
+    red[not_escaped] = 0
+    green[not_escaped] = 0
+    blue[not_escaped] = 0
+    
+    img = cp.stack([red, green, blue], axis=2)
+    
     img_cpu = cp.asnumpy(img)
     os.makedirs(DATA_DIR, exist_ok=True)
-    Image.fromarray(img_cpu).save(os.path.join(DATA_DIR, f'{img_name}.png'))
+    (
+        Image.fromarray(img_cpu)
+            .resize((width // AA_LEVEL, height // AA_LEVEL), Image.Resampling.LANCZOS)
+            .save(os.path.join(DATA_DIR, f'{img_name}.png'))
+    )
     
     if display:
         Image.fromarray(img_cpu).show()
