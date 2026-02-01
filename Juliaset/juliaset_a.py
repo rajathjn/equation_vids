@@ -10,27 +10,17 @@ CENTER = (0, 0)  # View center in complex plane
 ZOOM = 3.0       # Fixed zoom level (R = range of view)
 THRESHOLD_SQ = 4.0
 
-WIDTH = 1920
-HEIGHT = 1080
+WIDTH = 3840
+HEIGHT = 2160
 MAX_ITER = 500
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data_c')
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data_a')
 # For supersampling
-AA_LEVEL = 2
+AA_LEVEL = 1.5
 # Minimum c change per frame (determines frame count)
 C_RESOLUTION = 0.001
 
 import json
-points: dict[str, list[float]] = json.load(open(os.path.join(os.path.dirname(__file__), 'points.json')))
-
-# C value animation parameters
-point_names = random.sample(list(points.keys()), 10)
-point_names = ['h'] + point_names
-print(point_names)
-# User-defined list of target c-values to animate through
-# The animation will go: C_START -> C_POINTS[0] -> C_POINTS[1] -> ...
-C_POINTS = [complex(points.get(point_name)) for point_name in point_names]
-
-C_START = C_POINTS.pop(0)
+points: dict[str, str] = json.load(open(os.path.join(os.path.dirname(__file__), 'points.json')))
 
 
 def get_coordinates(R: float) -> tuple[float, float, float, float]:
@@ -48,6 +38,8 @@ def get_dynamic_p1( p0: complex, p1: complex) -> complex:
     """Get the dynamic p1 for a cubic Bezier curve."""
     midpoint = (p0 + p1) / 2
     vector = p1 - p0
+    if vector == 0:
+        vector = p1 + complex(0.01, 0.01)
     perpendicular_vector = complex(-vector.imag, vector.real) * random.uniform( 0.2, 0.5)
     direction = random.choice([1, -1])
     return midpoint + direction * perpendicular_vector
@@ -56,6 +48,8 @@ def get_dynamic_p1( p0: complex, p1: complex) -> complex:
 def calculate_frames(c_start: complex, c_end: complex) -> int:
     """Calculate number of frames based on distance and resolution."""
     distance = abs(c_end - c_start)
+    if distance == 0:
+        return 60*2  # Default to 120 frames if no distance
     return max(1, int(distance / C_RESOLUTION))
 
 
@@ -64,8 +58,8 @@ def generate_juliaset_gpu(c_value: complex, R: float, width: int, height: int,
     """
     Generate and save a Julia set image using GPU acceleration.
     """
-    width *= AA_LEVEL
-    height *= AA_LEVEL
+    width = int( width * AA_LEVEL )
+    height = int( height * AA_LEVEL )
 
     # Create complex plane on GPU
     x_min, x_max, y_min, y_max = get_coordinates(R)
@@ -140,7 +134,7 @@ def generate_juliaset_gpu(c_value: complex, R: float, width: int, height: int,
     os.makedirs(DATA_DIR, exist_ok=True)
     (
         Image.fromarray(img_cpu)
-            .resize((width // AA_LEVEL, height // AA_LEVEL), Image.Resampling.LANCZOS)
+            .resize((int(width // AA_LEVEL), int(height // AA_LEVEL)), Image.Resampling.LANCZOS)
             .save(os.path.join(DATA_DIR, f'{img_name}.png'))
     )
     
@@ -150,69 +144,87 @@ def generate_juliaset_gpu(c_value: complex, R: float, width: int, height: int,
     del img, img_cpu, escape_iter, not_escaped, z_real, z_imag, new_real, new_imag, c_real, c_imag
 
 
-def main():
-    if not C_POINTS:
-        print("Error: C_POINTS list is empty. Add target c-values to animate through.")
-        return
+def main(c_start: complex, c_end: complex):
     
     print(f"Julia Set C Animation")
     print(f"Resolution: {WIDTH}x{HEIGHT}, Max iterations: {MAX_ITER}")
     print(f"Fixed zoom level: {ZOOM}")
     print(f"C resolution: {C_RESOLUTION} per frame")
-    print(f"Starting c: {C_START}")
-    print(f"Target points: {len(C_POINTS)}")
+
+    # Creating a video for every pair of points given start and end
     
     # Warm up GPU
     print("\nWarming up GPU...")
-    generate_juliaset_gpu(C_START, ZOOM, 100, 100, 100, 'warmup', False)
+    generate_juliaset_gpu(c_start, ZOOM, 100, 100, 100, 'warmup', False)
     os.remove(os.path.join(DATA_DIR, 'warmup.png'))
     print("GPU ready!\n")
 
-    print(f"Point names: {point_names}")
+    print(f"Point names: {c_start} to {c_end}\n")
     
     total_start = time.time()
     frame_index = 0
-    c_start = C_START
     
-    for segment_idx, c_end in enumerate(C_POINTS):
-        segment_frames = calculate_frames(c_start, c_end)
-        distance = abs(c_end - c_start)
-        
-        print(f"Segment {segment_idx + 1}/{len(C_POINTS)}: {c_start:.4f} -> {c_end:.4f}")
-        print(f"  Distance: {distance:.4f}, Frames: {segment_frames}")
+    segment_frames = calculate_frames(c_start, c_end)
+    distance = abs(c_end - c_start)
+    
+    print(f"{c_start:.4f} -> {c_end:.4f}")
+    print(f"Distance: {distance:.4f}, Frames: {segment_frames}")
 
-        c_mid = get_dynamic_p1(c_start, c_end)
-        
-        for i in range(segment_frames):
-            start = time.time()
-            
-            t = i / max(1, segment_frames - 1) if segment_frames > 1 else 1.0
-            current_c = bezier_c(t, c_start, c_mid, c_end)
-            
-            frame_index += 1
-            img_name = f'Juliaset_c_{frame_index:04d}'
-            
-            generate_juliaset_gpu(current_c, ZOOM, WIDTH, HEIGHT, MAX_ITER, img_name, False)
-            cp.get_default_memory_pool().free_all_blocks()
-            
-            elapsed = time.time() - start
-            remaining = (segment_frames - i - 1) * elapsed
-            
-            if i % 10 == 0 or i == segment_frames - 1:
-                print(f"  Frame {i + 1}/{segment_frames} | c={current_c:.4f} | {elapsed:.2f}s | {remaining:.2f}s remaining")
-            
-            # Remove this break to generate full animation
-            # break
-        
-        # Move to next segment
-        c_start = c_end
-        # break  # Remove to process all segments
+    c_mid = get_dynamic_p1(c_start, c_end)
     
+    for i in range(segment_frames):
+        start = time.time()
+        
+        t = i / max(1, segment_frames - 1) if segment_frames > 1 else 1.0
+        current_c = bezier_c(t, c_start, c_mid, c_end)
+        
+        frame_index += 1
+        img_name = f'Juliaset_a_{frame_index:04d}'
+        
+        generate_juliaset_gpu(current_c, ZOOM, WIDTH, HEIGHT, MAX_ITER, img_name, False)
+        cp.get_default_memory_pool().free_all_blocks()
+        
+        elapsed = time.time() - start
+        remaining = (segment_frames - i - 1) * elapsed
+        
+        if i % 10 == 0 or i == segment_frames - 1:
+            print(f"  Frame {i + 1}/{segment_frames} | c={current_c:.4f} | {elapsed:.2f}s | {remaining:.2f}s remaining")
+            
     print(f"\nTotal frames: {frame_index}")
     print(f"Total time: {(time.time() - total_start)/60:.1f} min")
 
 
 if __name__ == '__main__':
-    main()
-    # create video
-    os.system(f'ffmpeg -framerate 60 -i "{DATA_DIR}/Juliaset_c_%04d.png" -c:v libx265 -pix_fmt yuv420p {"".join(point_names)}.mp4')
+    
+    # for all points in the points.json, create a vidro for each pair
+    point_names = list(points.keys())
+    
+    # create copies of list for custom start and end
+    point_names_start = point_names.copy()
+    point_names_end = point_names.copy()
+    
+    for start_id in point_names_start:
+        for end_id in point_names_end:
+            
+            if os.path.exists(f'videos/{start_id}{end_id}.mp4'):
+                print(f"Video {start_id}{end_id}.mp4 already exists. Skipping...")
+                continue
+            
+            print(f"Creating video from {start_id} to {end_id}")
+            start_idx: complex = complex(points[start_id])
+            end_idx: complex = complex(points[end_id])
+            main(start_idx, end_idx)
+            
+            # create video
+            os.system(f'ffmpeg -framerate 60 -i "{DATA_DIR}/Juliaset_a_%04d.png" -c:v libx265 -pix_fmt yuv420p videos/{start_id}{end_id}.mp4')
+            
+            # check if video created
+            if os.path.exists(f'videos/{start_id}{end_id}.mp4'):
+                print(f"Video {start_id}{end_id}.mp4 created successfully.")
+            else:
+                print(f"Error: Video {start_id}{end_id}.mp4 was not created.")
+                raise FileNotFoundError(f"Video {start_id}{end_id}.mp4 was not created.")
+            
+            # remove all images
+            for file in os.listdir(DATA_DIR):
+                os.remove(os.path.join(DATA_DIR, file))

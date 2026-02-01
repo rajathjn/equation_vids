@@ -1,19 +1,18 @@
-# Generate an image of Julia set using GPU acceleration
+# Generate Julia set images for each point in points.json
 import cupy as cp
-import time
+import json
 import os
 from PIL import Image
 
 # Constants
-# JULIA_C = -0.7 + 0.27015j  # Interesting Julia Set constant
-JULIA_C = -0.395+0.396j
 CENTER = (0, 0)
 THRESHOLD_SQ = 4.0
-FPS = 60.0
-DURATION = 60.0
 WIDTH = 1920
 HEIGHT = 1080
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+R = 3.0  # Zoom level
+MAX_ITER = 1000
+POINTS_DIR = os.path.join(os.path.dirname(__file__), 'points')
+POINTS_JSON = os.path.join(os.path.dirname(__file__), 'points.json')
 
 # For supersampling
 AA_LEVEL = 2
@@ -26,8 +25,8 @@ def get_coordinates(R: float) -> tuple[float, float, float, float]:
     return (px - half_r, px + half_r, py - half_r, py + half_r)
 
 
-def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int, 
-                          img_name: str, display: bool = False) -> None:
+def generate_juliaset_gpu(julia_c: complex, width: int, height: int, max_iter: int, 
+                          img_name: str) -> None:
     """
     Generate and save a Julia set image using GPU acceleration.
     """
@@ -46,8 +45,8 @@ def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int,
     z_imag = cp.broadcast_to(imag[:, cp.newaxis], (height, width)).copy()
     
     # C is constant for the entire image
-    c_real = cp.full((height, width), JULIA_C.real, dtype=cp.float64)
-    c_imag = cp.full((height, width), JULIA_C.imag, dtype=cp.float64)
+    c_real = cp.full((height, width), julia_c.real, dtype=cp.float64)
+    c_imag = cp.full((height, width), julia_c.imag, dtype=cp.float64)
     
     # Track escape iterations on GPU
     escape_iter = cp.zeros((height, width), dtype=cp.uint16)
@@ -108,15 +107,12 @@ def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int,
     img = cp.stack([red, green, blue], axis=2)
     
     img_cpu = cp.asnumpy(img)
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(POINTS_DIR, exist_ok=True)
     (
         Image.fromarray(img_cpu)
             .resize((width // AA_LEVEL, height // AA_LEVEL), Image.Resampling.LANCZOS)
-            .save(os.path.join(DATA_DIR, f'{img_name}.png'))
+            .save(os.path.join(POINTS_DIR, f'{img_name}.png'))
     )
-    
-    if display:
-        Image.fromarray(img_cpu).show()
     
     # Free up memory
     del img, img_cpu, escape_iter, not_escaped, z_real, z_imag, new_real, new_imag, c_real, c_imag
@@ -125,56 +121,34 @@ def generate_juliaset_gpu(R: float, width: int, height: int, max_iter: int,
 
 
 def main():
-    total_frames = int(FPS * DURATION)
+    # Load points from JSON
+    with open(POINTS_JSON, 'r') as f:
+        points = json.load(f)
     
-    max_iter_start = 1000
-    max_iter_end = 5000
-    
-    R_start = 3.0
-    R_end = 1e-13
-    
-    start_index = 0
-        
-    print(f"Generating {total_frames} images")
-    print(f"Zooming from {R_start} down to {R_end}")
-    print(f"Resolution: {WIDTH}x{HEIGHT}, Max iterations: {max_iter_start} to {max_iter_end}")
+    print(f"Generating Julia set images for {len(points)} points")
+    print(f"Resolution: {WIDTH}x{HEIGHT}, Max iterations: {MAX_ITER}")
+    print(f"Zoom level (R): {R}")
     print(f"Using GPU acceleration with CuPy")
-    print(f"Julia Constant: {JULIA_C}")
+    print(f"Output directory: {POINTS_DIR}\n")
     
     # Warm up GPU
     print("Warming up GPU...")
-    generate_juliaset_gpu(R_start, 100, 100, 100, 'warmup', False)
-    os.remove(os.path.join(DATA_DIR, 'warmup.png'))
+    test_c = complex(points['a'])
+    generate_juliaset_gpu(test_c, 100, 100, 100, 'warmup')
+    warmup_file = os.path.join(POINTS_DIR, 'warmup.png')
+    if os.path.exists(warmup_file):
+        os.remove(warmup_file)
     print("GPU ready!\n")
     
-    total_start = time.time()
-    
-    for i in range(start_index+1, total_frames+1):
-        start = time.time()
+    # Generate image for each point
+    for idx, (key, value) in enumerate(points.items(), 1):
+        julia_c = complex(value)
+        print(f"[{idx}/{len(points)}] Generating {key}.png (c = {julia_c})")
         
-        # This ensures the zoom 'feel' is perfectly constant at FPS
-        current_R = R_start * (R_end / R_start) ** (i / total_frames)
-        
-        # Linearly increase iterations as we go deeper
-        current_iter = max_iter_start + (max_iter_end - max_iter_start) * (i / total_frames)
-        current_iter = int(current_iter)
-        
-        img_name = f'Juliaset_{i:04d}'
-        
-        generate_juliaset_gpu(current_R, WIDTH, HEIGHT, current_iter, img_name, False)
+        generate_juliaset_gpu(julia_c, WIDTH, HEIGHT, MAX_ITER, key)
         cp.get_default_memory_pool().free_all_blocks()
-        
-        elapsed = time.time() - start
-        remaining = (total_frames - i) * elapsed / 60
-        
-        if i % 10 == 0 or i == total_frames:
-            print(f"Frame {i:04d}/{total_frames} | Time: {elapsed:.2f}s | Est. remaining: {remaining:.1f} min")
-        
-        # Consistent with the Mandelbrot example, stopping after one frame
-        # Remove this break to generate the full sequence
-        break
     
-    print(f"\nTotal time: {(time.time() - total_start)/60:.1f} min")
+    print(f"\nComplete! {len(points)} images saved to {POINTS_DIR}")
 
 
 if __name__ == '__main__':
