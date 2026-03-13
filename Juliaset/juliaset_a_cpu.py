@@ -5,7 +5,7 @@ import time
 import os
 from PIL import Image
 import random
-import shutil
+import subprocess
 
 # Constants
 CENTER = (0, 0)  # View center in complex plane
@@ -16,23 +16,14 @@ WIDTH = 3840
 HEIGHT = 2160
 MAX_ITER = 500
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data_a')
-CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache_a')
 # For supersampling
 AA_LEVEL = 1.5
 # Minimum c change per frame (determines frame count)
 C_RESOLUTION = 0.001
 
 import json
-points: dict[str, str] = json.load(open(os.path.join(os.path.dirname(__file__), 'points.json')))
-
-
-def c_to_cache_name(c: complex) -> str:
-    """Convert a c-value to a deterministic cache filename based on C_RESOLUTION."""
-    # Quantize real and imaginary parts to C_RESOLUTION
-    qr = round(c.real / C_RESOLUTION) * C_RESOLUTION
-    qi = round(c.imag / C_RESOLUTION) * C_RESOLUTION
-    # Format with enough decimals to be unique at the resolution
-    return f"c_{qr:+.4f}_{qi:+.4f}i"
+with open(os.path.join(os.path.dirname(__file__), 'points.json')) as _f:
+    points: dict[str, str] = json.load(_f)
 
 
 def get_coordinates(R: float) -> tuple[float, float, float, float]:
@@ -101,20 +92,8 @@ def julia_kernel(z_real: np.ndarray, z_imag: np.ndarray,
 
 
 def generate_juliaset_cpu(c_value: complex, R: float, width: int, height: int, 
-                          max_iter: int, img_name: str, display: bool = False) -> str:
-    """
-    Generate and save a Julia set image using CPU computation.
-    Returns the path to the saved image (in the cache directory).
-    If the image already exists in the cache, it is not regenerated.
-    """
-    # Check cache first
-    cache_name = c_to_cache_name(c_value)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(CACHE_DIR, f'{cache_name}.png')
-    
-    if os.path.exists(cache_path):
-        return cache_path  # Already computed, skip!
-    
+                          max_iter: int, out_path: str) -> None:
+    """Generate and save a Julia set image using CPU computation."""
     width = int( width * AA_LEVEL )
     height = int( height * AA_LEVEL )
 
@@ -167,38 +146,22 @@ def generate_juliaset_cpu(c_value: complex, R: float, width: int, height: int,
     
     img = np.stack([red, green, blue], axis=2)
     
-    img_cpu = img
     (
-        Image.fromarray(img_cpu)
+        Image.fromarray(img)
             .resize((int(width // AA_LEVEL), int(height // AA_LEVEL)), Image.Resampling.LANCZOS)
-            .save(cache_path)
+            .save(out_path)
     )
     
-    if display:
-        Image.fromarray(img_cpu).show()
-    
-    del img, img_cpu, escape_iter, not_escaped, z_real, z_imag
-    return cache_path
+    del img, escape_iter, not_escaped, z_real, z_imag
 
 
-def main(c_start: complex, c_end: complex) -> list[str]:
-    """Generate Julia set frames and return ordered list of cached image paths."""
+def main(c_start: complex, c_end: complex) -> int:
+    """Generate Julia set frames into DATA_DIR. Returns frame count."""
     
     print(f"Julia Set C Animation")
     print(f"Resolution: {WIDTH}x{HEIGHT}, Max iterations: {MAX_ITER}")
     print(f"Fixed zoom level: {ZOOM}")
     print(f"C resolution: {C_RESOLUTION} per frame")
-
-    # Creating a video for every pair of points given start and end
-    
-    # Warm up CPU (use a throwaway c-value to avoid polluting cache)
-    print("\nWarming up CPU...")
-    generate_juliaset_cpu(complex(999, 999), ZOOM, 100, 100, 100, 'warmup', False)
-    # Remove warmup image from cache
-    warmup_cache = os.path.join(CACHE_DIR, f'{c_to_cache_name(complex(999, 999))}.png')
-    if os.path.exists(warmup_cache):
-        os.remove(warmup_cache)
-    print("CPU ready!\n")
 
     print(f"Point names: {c_start} to {c_end}\n")
     
@@ -212,9 +175,9 @@ def main(c_start: complex, c_end: complex) -> list[str]:
 
     c_mid = get_dynamic_p1(c_start, c_end)
     
-    frame_paths = []  # Ordered list of image paths for this segment
-    generated_count = 0
-    cached_count = 0
+    os.makedirs(DATA_DIR, exist_ok=True)
+    for file in os.listdir(DATA_DIR):
+        os.remove(os.path.join(DATA_DIR, file))
     
     for i in range(segment_frames):
         start = time.time()
@@ -222,28 +185,18 @@ def main(c_start: complex, c_end: complex) -> list[str]:
         t = i / max(1, segment_frames - 1) if segment_frames > 1 else 1.0
         current_c = bezier_c(t, c_start, c_mid, c_end)
         
-        cache_name = c_to_cache_name(current_c)
-        cache_path = os.path.join(CACHE_DIR, f'{cache_name}.png')
-        was_cached = os.path.exists(cache_path)
-        
-        result_path = generate_juliaset_cpu(current_c, ZOOM, WIDTH, HEIGHT, MAX_ITER, '', False)
-        frame_paths.append(result_path)
-        
-        if was_cached:
-            cached_count += 1
-        else:
-            generated_count += 1
+        out_path = os.path.join(DATA_DIR, f'Juliaset_a_{i + 1:04d}.png')
+        generate_juliaset_cpu(current_c, ZOOM, WIDTH, HEIGHT, MAX_ITER, out_path)
         
         elapsed = time.time() - start
         remaining = (segment_frames - i - 1) * elapsed
         
-        status = "CACHED" if was_cached else f"{elapsed:.2f}s"
         if i % 10 == 0 or i == segment_frames - 1:
-            print(f"  Frame {i + 1}/{segment_frames} | c={current_c:.4f} | {status} | ~{remaining:.1f}s remaining")
+            print(f"  Frame {i + 1}/{segment_frames} | c={current_c:.4f} | {elapsed:.2f}s | ~{remaining:.1f}s remaining")
             
-    print(f"\nTotal frames: {len(frame_paths)} (generated: {generated_count}, from cache: {cached_count})")
+    print(f"\nTotal frames: {segment_frames}")
     print(f"Total time: {(time.time() - total_start)/60:.1f} min")
-    return frame_paths
+    return segment_frames
 
 
 if __name__ == '__main__':
@@ -251,47 +204,38 @@ if __name__ == '__main__':
     # for all points in the points.json, create a video for each pair
     point_names = list(points.keys())
     
-    # create copies of list for custom start and end
-    point_names_start = point_names.copy()
-    point_names_end = point_names.copy()
-    
-    for start_id in point_names_start:
-        for end_id in point_names_end:
+    for start_id in point_names:
+        for end_id in point_names:
             
-            if os.path.exists(f'videos/{start_id}{end_id}.mp4'):
+            video_dir = os.path.join(os.path.dirname(__file__), '..', 'videos')
+            os.makedirs(video_dir, exist_ok=True)
+            video_path = os.path.join(video_dir, f'{start_id}{end_id}.mp4')
+            
+            if os.path.exists(video_path):
                 print(f"Video {start_id}{end_id}.mp4 already exists. Skipping...")
                 continue
             
             print(f"Creating video from {start_id} to {end_id}")
             start_idx: complex = complex(points[start_id])
             end_idx: complex = complex(points[end_id])
-            frame_paths = main(start_idx, end_idx)
+            main(start_idx, end_idx)
             
-            # Stage frames into DATA_DIR with sequential names for ffmpeg
-            os.makedirs(DATA_DIR, exist_ok=True)
-            # Clear any old staged frames
-            for file in os.listdir(DATA_DIR):
-                os.remove(os.path.join(DATA_DIR, file))
+            # Create video from frames in DATA_DIR
+            result = subprocess.run(
+                ['ffmpeg', '-framerate', '60',
+                 '-i', os.path.join(DATA_DIR, 'Juliaset_a_%04d.png'),
+                 '-c:v', 'libx265', '-pix_fmt', 'yuv420p', video_path],
+                capture_output=True, text=True
+            )
             
-            # Copy/link cached images into DATA_DIR with sequential numbering
-            for idx, src_path in enumerate(frame_paths, start=1):
-                dst_path = os.path.join(DATA_DIR, f'Juliaset_a_{idx:04d}.png')
-                shutil.copy2(src_path, dst_path)
-            
-            # create video
-            os.system(f'ffmpeg -framerate 60 -i "{DATA_DIR}/Juliaset_a_%04d.png" -c:v libx265 -pix_fmt yuv420p videos/{start_id}{end_id}.mp4')
-            
-            # check if video created
-            if os.path.exists(f'videos/{start_id}{end_id}.mp4'):
-                print(f"Video {start_id}{end_id}.mp4 created successfully.")
-            else:
+            if result.returncode != 0 or not os.path.exists(video_path):
                 print(f"Error: Video {start_id}{end_id}.mp4 was not created.")
-                raise FileNotFoundError(f"Video {start_id}{end_id}.mp4 was not created.")
+                print(result.stderr)
+                raise RuntimeError(f"ffmpeg failed for {start_id}{end_id}.mp4")
             
-            # Clean up staged frames (cache is preserved!)
+            print(f"Video {start_id}{end_id}.mp4 created successfully.")
+            
+            # Clean up frames
             for file in os.listdir(DATA_DIR):
                 os.remove(os.path.join(DATA_DIR, file))
-            # No need of cache
-            for file in os.listdir(CACHE_DIR):
-                os.remove(os.path.join(CACHE_DIR, file))
 
